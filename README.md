@@ -1,71 +1,79 @@
-# ML-kaggle
-
-Here’s a clean English `README.md` you can drop into the repo:
 
 ````markdown
-# Truck Fuel Consumption Forecast – Student Solution
+# Truck Fuel Consumption Forecast
 
-This repository contains my solution for the BME “Data Science Competition” homework on the **Truck fuel consumption forecast** Kaggle task.
+Course project for the **Data Science Competition** at BME.  
+The goal is to predict the **total fuel consumption** of a truck trip (in liters) for each 1-km segment, using sensor, vehicle and environmental data.
 
-The goal is to predict `fuel_consumption_sum` for each 1 km segment using telematics and environmental signals.
-
-My final Kaggle submission is an **ensemble of LightGBM and CatBoost**, tuned directly on MAE to match the competition metric.
-
----
-
-## 1. Repository Structure
-
-```text
-truck-fuel-consumption-forecast/
-├── README.md
-├── report/
-│   └── report.pdf                 # 1–3 page project report (for the course)
-│
-├── data/                          # NOT tracked in git
-│   ├── public_train.csv
-│   └── public_test.csv
-│
-├── solutionv5.1_v7.py             # LightGBM main model (L1 objective + OOF target encoding)
-├── solutionv7.py                  # CatBoost auxiliary model
-├── solutionv1.py                  # Blending script (LGBM + CatBoost)
-│
-├── submissions/                   # Example outputs
-│   ├── submission_v5_1_lgbm_mae_18.9639.csv
-│   ├── submission_v7_catboost_mae_19.0721.csv
-│   └── submission_blend_55LGB_44Cat.csv   # final best submission
-└── requirements.txt
-````
-
-> **Note:** `data/` is only a local folder and should be added to `.gitignore`.
-> The Kaggle files `public_train.csv` and `public_test.csv` must be placed there manually.
+The final solution achieves a **public leaderboard MAE ≈ 19.65** on Kaggle, using an ensemble of a LightGBM model and a CatBoost model.
 
 ---
 
-## 2. Environment
+## 1. Dataset
 
-The code was tested with:
+Competition: **“Truck fuel consumption forecast”** (Kaggle classroom competition).
 
-* Python 3.12
-* `pandas`
-* `numpy`
-* `scikit-learn`
-* `lightgbm`
-* `catboost`
-* `matplotlib`, `seaborn` (only for plots, not required for submission)
-
-You can install dependencies via:
+Download the three CSV files from Kaggle and place them locally as:
 
 ```bash
-pip install -r requirements.txt
-```
+data/
+  public_train.csv
+  public_test.csv
+  public_sample_submission.csv
+````
 
-(or install the packages manually if needed).
+> Note: The `data/` folder in the repository only contains a placeholder file (`.gitkeeper`).
+> Raw CSVs are **not** committed due to size and competition rules.
+
+Target column in `public_train.csv`:
+
+* `fuel_consumption_sum` – total fuel consumption for that 1-km segment.
 
 ---
 
-## 3. Feature Engineering Overview
+## 2. Repository Structure
 
-All models share the same core feature engineering, implemented directly inside the training scripts:
+```text
+.
+├── README.md
+│
+├── data/                       # NOT tracked in git (only .gitkeeper)
+│   ├── public_train.csv        # downloaded from Kaggle (local only)
+│   ├── public_test.csv
+│   └── public_sample_submission.csv
+│
+├── src/
+│   └── features/
+│       └── build_features.py   # shared feature engineering utilities (if used)
+│
+├── model/
+│   ├── solutionv5.1_v7.py      # blending script (LightGBM + CatBoost)
+│   └── solutionv7.py           # CatBoost single model (V7)
+│   # (optional: other model scripts can also be placed here)
+│
+├── experiments/                # older versions / exploratory work
+│   ├── solutionv3.py
+│   ├── solutionv5.py
+│   ├── solutionv6.py
+│   ├── solutionv8.py
+│   └── ...                     # etc., not used in final submission
+│
+└── submissions/
+    ├── submission_v5_1_lgbm_mae_18.9639.csv   # LightGBM single model
+    ├── submission_v7_catboost_mae_19.0721.csv # CatBoost single model
+    └── submission_blend_55LGB_44Cat.csv       # ✅ final Kaggle submission
+```
+
+Only the **`model/`**, **`src/`**, **`experiments/`**, **`submissions/`** and a placeholder under **`data/`** are pushed to GitHub.
+The teacher can reproduce the results by downloading the Kaggle data into `data/`.
+
+---
+
+## 3. Method Overview
+
+### 3.1 Feature Engineering
+
+Feature engineering is done directly inside the model scripts (and optionally in `src/features/build_features.py`):
 
 * **Physical features**
 
@@ -75,102 +83,148 @@ All models share the same core feature engineering, implemented directly inside 
 
 * **Environment interaction**
 
-  * Convert `env_wind_kph` and `env_sailing_value` to numeric
-  * `wind_assist = env_wind_kph * env_sailing_value`
+  * Clean `env_wind_kph` and `env_sailing_value` and create
+    `wind_assist = env_wind_kph * env_sailing_value`.
 
-* **OOF Target Encoding (solutionv5.1_v7.py)**
-  For high-cardinality categorical columns
-  (`driver_name_and_id`, `vehicle_type`, `route_id`, `vehicle_motortype`, `deviceuniquecode`),
-  I use 5-fold **out-of-fold target encoding**:
+* **OOF Target Encoding**
 
-  * For each fold, encode validation rows using means computed on the other folds.
-  * For the test set, encode using means computed on the full training data.
-  * This avoids target leakage while giving the models strong aggregated signals.
+  * For high-cardinality categorical columns
+    (`driver_name_and_id`, `vehicle_type`, `route_id`, `vehicle_motortype`, `deviceuniquecode`)
+  * 5-fold **out-of-fold** target encoding to avoid target leakage:
 
-Original ID-like string columns are dropped; the models only see the encoded `_te` features plus numeric signals.
+    * Each fold’s encoding is computed from the other folds.
+    * Test set encoding uses global means from the full train set.
+  * Original high-cardinality columns are dropped and only the `*_te` columns are kept.
 
----
+* **Cleaning**
 
-## 4. Models
+  * Convert candidate numeric columns from string to numeric (`errors='coerce'`).
+  * Drop unused IDs such as `ID`, `Trip_ID_first`, `Trip_ID_last` from the feature set.
 
-### 4.1 LightGBM – `solutionv5.1_v7.py` (main model)
+### 3.2 Models
 
-* Objective: `mae`
-* Metric: `mae`
-* 5-fold cross validation with shuffling
-* Key hyperparameters:
+1. **LightGBM (V5.1) – MAE Objective with OOF Target Encoding**
 
-  * `learning_rate = 0.05`
-  * `num_leaves = 63`
-  * `feature_fraction = 0.9`
-  * `bagging_fraction = 0.8`, `bagging_freq = 1`
-  * `min_data_in_leaf = 40`
-  * `lambda_l2 = 1.0`
-* Early stopping with `num_boost_round = 5000` and patience 200.
-* The script:
+   * Implemented in: `model/solutionv5.1_v7.py` (LightGBM part)
+   * 5-fold CV, KFold with shuffling.
+   * Objective / metric: `mae`
+   * Typical parameters (simplified):
 
-  * Reads `data/public_train.csv` and `data/public_test.csv`
-  * Builds features + OOF target encoding
-  * Trains LGBM in 5 folds
-  * Saves the final prediction as
-    `submission_v5_1_lgbm_mae_18.9639.csv`
+     ```python
+     params = {
+         "objective": "mae",
+         "metric": "mae",
+         "boosting_type": "gbdt",
+         "learning_rate": 0.05,
+         "num_leaves": 63,
+         "feature_fraction": 0.9,
+         "bagging_fraction": 0.8,
+         "bagging_freq": 1,
+         "min_data_in_leaf": 40,
+         "lambda_l2": 1.0,
+         "verbose": -1,
+         "seed": 42,
+     }
+     ```
+   * Early stopping with up to 5000 boosting rounds.
+   * Produces:
 
-### 4.2 CatBoost – `solutionv7.py` (auxiliary model)
+     * `submission_v5_1_lgbm_mae_18.9639.csv`
+     * CV MAE ≈ 18.96
 
-* Uses CatBoostRegressor with MAE objective.
-* Treats the original high-cardinality categorical features directly as CatBoost categories.
-* 5-fold cross validation, tuned to get a reasonably strong but diverse model.
-* The script saves predictions as
-  `submission_v7_catboost_mae_19.0721.csv`.
+2. **CatBoost (V7)**
 
-### 4.3 Blending – `solutionv1.py` (final submission)
+   * Implemented in: `model/solutionv7.py`
+   * Handles categorical features natively.
+   * Also trained with MAE objective (regression).
+   * Produces:
 
-* Reads the two single-model submissions:
+     * `submission_v7_catboost_mae_19.0721.csv`
 
-  ```text
-  submission_v5_1_lgbm_mae_18.9639.csv
-  submission_v7_catboost_mae_19.0721.csv
-  ```
+3. **Weighted Blending (Final Model)**
 
-* Blends them by a **weighted average on predictions**:
+   * Implemented in: `model/solutionv5.1_v7.py`
+   * Read the two single-model submissions and blend their predictions:
 
-  [
-  \hat{y} = 0.55 \cdot \hat{y}*{LGBM} + 0.44 \cdot \hat{y}*{CatBoost}
-  ]
-
-* Writes the final file:
-
-  ```text
-  submission_blend_55LGB_44Cat.csv
-  ```
-
-This blended submission achieved my **best public leaderboard MAE** and is the solution used for the homework.
-
----
-
-## 5. How to Reproduce the Final Submission
-
-Assuming you are in the `truck-fuel-consumption-forecast` folder and have put the Kaggle CSVs under `data/`:
-
-```bash
-# 1. Train LightGBM and generate its submission
-python solutionv5.1_v7.py
-
-# 2. Train CatBoost and generate its submission
-python solutionv7.py
-
-# 3. Blend the two submissions into the final file
-python solutionv1.py
-```
-
-The final file `submission_blend_55LGB_44Cat.csv` is ready to be uploaded to Kaggle.
+     ```python
+     # 55% LightGBM V5.1 + 44% CatBoost V7
+     df_blend_55 = df_lgb.copy()
+     df_blend_55[target_col] = (
+         df_lgb[target_col] * 0.55 +
+         df_cat[target_col] * 0.45
+     )
+     df_blend_55.to_csv("submissions/submission_blend_55LGB_44Cat.csv", index=False)
+     ```
+   * This simple linear ensemble improves the public leaderboard score to
+     **MAE ≈ 19.6455**, which is used as the final submission.
 
 ---
 
-## 6. Notes
+## 4. How to Reproduce
 
-* All scripts are written to be **self-contained**: each one reads from `data/` and writes outputs to the project root or `submissions/`.
-* I focused on **metric-aligned training (MAE)**, **leak-safe OOF target encoding**, and **small-ensemble blending** to reach a competitive leaderboard score within limited time and hardware resources.
+1. **Clone the repository**
+
+   ```bash
+   git clone <your_repo_url>.git
+   cd truck-fuel-consumption-forecast
+   ```
+
+2. **Prepare environment**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+   (or use `environment.yml` with conda, if provided)
+
+3. **Download data**
+
+   * From the Kaggle competition page download:
+
+     * `public_train.csv`
+     * `public_test.csv`
+     * `public_sample_submission.csv`
+   * Place them under `data/` as described above.
+
+4. **Train single models & generate submissions (optional)**
+
+   ```bash
+   # LightGBM V5.1
+   python model/solutionv5.1_v7.py  # will train LGBM and save its submission
+
+   # CatBoost V7
+   python model/solutionv7.py       # will train CatBoost and save its submission
+   ```
+
+5. **Generate final blended submission**
+
+   * Ensure the two single-model CSV files are present under `submissions/`:
+
+     * `submission_v5_1_lgbm_mae_18.9639.csv`
+     * `submission_v7_catboost_mae_19.0721.csv`
+   * Run:
+
+     ```bash
+     python model/solutionv5.1_v7.py  # blending part will create submission_blend_55LGB_44Cat.csv
+     ```
+
+6. **Upload to Kaggle**
+
+   * Submit `submissions/submission_blend_55LGB_44Cat.csv`
+     as the final prediction file.
+
+---
+
+## 5. Experiments
+
+The `experiments/` folder contains earlier versions and ablation studies:
+
+* **solutionv3** – RMSE-based baseline.
+* **solutionv5 / v5.3** – first MAE objective + target encoding attempts.
+* **solutionv6** – multi-seed LightGBM ensemble (did not beat the final blend).
+* **solutionv8** – trip-level aggregation features; performance was worse than V5.1.
+
+These scripts are not needed for reproduction, but they document the exploration process and show why the final blend of **LightGBM V5.1 + CatBoost V7** was chosen.
 
 ```
 
